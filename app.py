@@ -14,7 +14,7 @@ def main():
     parser.add_argument("--formal-type", default="Litex", help="formal_type 字段")
     parser.add_argument("--header", default="", help="header 字段")
     parser.add_argument("--max", type=int, default=0, help="最多处理条数，0 表示全部")
-    parser.add_argument("--retries", type=int, default=4, help="生成失败时的重试次数")
+    parser.add_argument("--retries", type=int, default=8, help="生成失败时的重试次数")
     args = parser.parse_args()
 
     tackler = Jsonl_tackler(args.input)
