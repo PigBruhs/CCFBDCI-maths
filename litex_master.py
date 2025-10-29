@@ -2,7 +2,7 @@ import os
 import requests
 
 SILICONFLOW_API_URL = "https://api.siliconflow.cn/v1/chat/completions"
-SILICONFLOW_MODEL = "Pro/deepseek-ai/DeepSeek-V3.2-Exp"
+SILICONFLOW_MODEL = "Pro/deepseek-ai/DeepSeek-V3.1-Terminus"
 REQUEST_TIMEOUT = 60  # seconds
 token='sk-zvhwnuezxothhkbprbgjiuvrxpraxsjoonrhsbubghmfbblf'
 
