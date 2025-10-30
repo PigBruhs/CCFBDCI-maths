@@ -5,13 +5,13 @@ import time
 import re
 from tqdm import tqdm
 from decoder_encoder import Jsonl_tackler
-from litex_master import litex_master
+from lean_master import lean_master
 import time
 
 def main():
     parser = argparse.ArgumentParser(description="从 jsonl 读取题目，生成 Litex 形式并写入新 jsonl（带重试逻辑）")
     parser.add_argument("-i", "--input", default="practice_data.jsonl", help="输入 jsonl 文件路径")
-    parser.add_argument("-o", "--output", default=f"./output_jsonl/practice_data_formal_{time.time()}.jsonl", help="输出 jsonl 文件路径")
+    parser.add_argument("-o", "--output", default=f"./output_jsonl/practice_data_lean_{time.time()}.jsonl", help="输出 jsonl 文件路径")
     parser.add_argument("--formal-type", default="Litex", help="formal_type 字段")
     parser.add_argument("--max", type=int, default=0, help="最多处理条数，0 表示全部")
     # 保持命令行兼容，但实际重试次数固定为 8 次
@@ -39,7 +39,7 @@ def main():
 
             for attempt in range(1, max_attempts + 1):
                 try:
-                    gen_text = litex_master(nl_problem)
+                    gen_text = lean_master(nl_problem)
                     if gen_text is None or not str(gen_text).strip():
                         raise RuntimeError("LLM 返回空响应")
                     break
