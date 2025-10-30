@@ -13,9 +13,17 @@ def litex_master(nl_problem: str) -> str:
     """
 
     prompt = (
-        "你是一个擅长使用Litex格式的数学家。你将会收到若干数学问题的自然语言描述。"
+        "你是一个擅长使用Litex（版本v0.1.11-beta）格式的数学家。你将会收到若干数学问题的自然语言描述。"
         "你将会按照示例中的格式，将nl_problem中描述的问题转换成litex格式的命题陈述，"
-        "并生成完整的、可执行的证明脚本。请严格按照示例进行输出，并不要写任何注释或多余的文字。\n"
+        "并生成完整的、可执行的证明脚本。请严格按照示例进行输出。请按照要求填写注释。\n"
+        "请注意：formal_code中不能有作弊代码，必须是完整的数学形式化证明（不能使用know）！！！"
+        "请严格参考示例输出！！！不要使用markdown的格式符号！！！（如**header** 应为header）"
+        "输出格式：header:除题干、形式化证明核心逻辑（主定理）以外的环境代码、引理等。如Lean中的import、open、lemma、子定理部分；及Litex中的import、know、prop、fn部分。"
+        "formal_statement:形式化题干。question部分，即主定理的问题部分不含证明逻辑。如 Lean 中的主 theorem 到 := 部分；及Litex中的claim到prove部分。"
+        "formal_code:代码（全）。格式要求："
+        "1.不能有转义问题；"
+        "2.核心逻辑有注释；"
+        "3.不能有作弊代码，必须是完整的数学形式化证明（如Lean的sorry、假设及Litex的know等）。"
         "示例输入：nl_problem: Three cubes have edges of lengths 4,5 and 6 .\n\n"
         "The average (mean) of their volumes is\n(A) 120\n(B) 125\n(C) 1125\n(D) 261\n(E) 135\n\n"
         "![](https://cdn.mathpix.com/cropped/2024_04_20_ac36362783317e0251fdg-104.jpg?height=249&width=379&top_left_y=1220&top_left_x=1293) "
@@ -45,6 +53,8 @@ def litex_master(nl_problem: str) -> str:
                 "content": prompt + "\n\n" + str(nl_problem),
             }
         ],
+        "temperature": 0.4,
+        "enable_thinking": False,
     }
 
     resp = requests.post(SILICONFLOW_API_URL, json=payload, headers=headers, timeout=REQUEST_TIMEOUT)
