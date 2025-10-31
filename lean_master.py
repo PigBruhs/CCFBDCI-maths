@@ -48,6 +48,7 @@ def lean_master(nl_problem: str) -> str:
         ],
         "temperature": 0.4,
         "enable_thinking": False,
+        "max_token":4096,
     }
 
     resp = requests.post(SILICONFLOW_API_URL, json=payload, headers=headers, timeout=REQUEST_TIMEOUT)
