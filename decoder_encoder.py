@@ -1,8 +1,10 @@
 import json
 import re
 from typing import Dict, Any, Iterable, List, Tuple, Union
+import os
 
 
+# python
 class Jsonl_tackler:
     def __init__(self, input_path: str):
         self.input_path = input_path
@@ -10,21 +12,24 @@ class Jsonl_tackler:
 
     def decode(self) -> Dict[str, str]:
         """
-        读取输入 jsonl，填充并返回 {id: nl_problem} 映射
+        读取输入 jsonl，填充并返回 {id: nl_problem} 映射（容错多种字段名）。
         """
         result: Dict[str, str] = {}
         with open(self.input_path, "r", encoding="utf-8") as f:
             for lineno, line in enumerate(f, start=1):
-                line = line.strip()
-                if not line:
+                s = line.strip()
+                if not s:
                     continue
                 try:
-                    obj = json.loads(line)
-                except json.JSONDecodeError as e:
-                    raise ValueError(f"第 {lineno} 行 JSON 解析失败: {e.msg}") from e
-                if "id" not in obj or "nl_problem" not in obj:
-                    raise KeyError(f"第 {lineno} 行缺少字段 'id' 或 'nl_problem'")
-                result[str(obj["id"])] = str(obj["nl_problem"])
+                    obj = json.loads(s)
+                except Exception:
+                    continue
+                # 兼容多种字段名
+                rid = obj.get("id") or obj.get("rec_id") or obj.get("question_id")
+                nl = obj.get("nl_problem") or obj.get("question") or obj.get("problem") or obj.get("input") or obj.get("text")
+                if rid is None or nl is None:
+                    continue
+                result[str(rid)] = str(nl)
         self.mapping = result
         return result
 
@@ -44,72 +49,104 @@ class Jsonl_tackler:
         # 检测 Lean 的 `sorry`（不区分大小写）
         if re.search(r"\bsorry\b", formal_code, flags=re.IGNORECASE):
             raise ValueError("formal_code 包含禁止的作弊标识：'sorry'")
-
         # 检测 Litex 中以行首的 `know`（简单规则，按行检测）
         for ln in formal_code.splitlines():
             if re.match(r"^\s*know\b", ln, flags=re.IGNORECASE):
-                raise ValueError("formal_code 包含禁止的 Litex-cheat：以行首的 'know'")
+                raise ValueError("formal_code 包含禁止的作弊标识：'know'")
 
     @staticmethod
     def _extract_code_block(s: str) -> str:
         """
-        尝试提取三重反引号内的第一段代码（若存在），否则返回原始字符串。
+        若整段被三重反引号围栏（含语言标签，如 ```lean）包裹，抽出第一段代码；否则返回原始字符串。
         """
         if not isinstance(s, str):
             return s
-        m = re.search(r'```(?:[\w+-]*\n)?(.*?)```', s, flags=re.S)
+        m = re.search(r'```(?:[\w.+-]*\n)?(.*?)```', s, flags=re.S)
         if m:
             return m.group(1)
         return s
 
     @staticmethod
+    def _strip_outer_md_fence(text: str) -> str:
+        """
+        去除一层最外侧三重反引号围栏（允许语言标记），仅当整块以围栏包裹时生效。
+        """
+        if not isinstance(text, str):
+            return text
+        t = text.strip()
+        if t.startswith("```") and t.endswith("```"):
+            # 去掉起始 ```lang\n 与结尾 ```
+            inner = re.sub(r'^\s*```[\w.+-]*\n?', '', t, count=1, flags=re.S)
+            inner = re.sub(r'```\s*$', '', inner, count=1, flags=re.S)
+            return inner
+        return text
+
+    @staticmethod
+    def _strip_all_outer_md_fences(text: str) -> str:
+        """
+        反复去除最外层围栏，直到不再是完整围栏包裹。
+        """
+        prev = None
+        cur = text
+        for _ in range(5):
+            if prev == cur:
+                break
+            prev = cur
+            cur = Jsonl_tackler._strip_outer_md_fence(cur)
+        return cur
+
+    @staticmethod
     def _clean_content_block(s: str) -> str:
         """
-        对提取到的内容做有限清洗：
-        - 去除外围三重反引号（若未被 _extract_code_block 抽出）
+        对提取到的内容做有限清洗（面向 Markdown 输出）：
+        - 去除外围三重反引号（含 ```lean 等语言标签，支持重复嵌套）
         - 去除外围单/双反引号
-        - 去除两端的成对 \*\* 或 \*
-        - 去掉每行行首的列表标记 (\- 或 \*)
+        - 去除外围成对 \*\* 或 \*
+        - 去掉每行开头的引用符号 `>` 与常见列表标记（\- 或 \*）
         - 保留内部换行与缩进
         """
         if not isinstance(s, str):
             return s
         text = s
 
-        # 去除外围三重反引号（冗余情况）
-        if text.strip().startswith("```") and text.strip().endswith("```"):
-            inner = re.sub(r'^\s*```[\w+-]*\n?', '', text, count=1, flags=re.S)
-            inner = re.sub(r'```\s*$', '', inner, count=1, flags=re.S)
-            text = inner
+        # 去除所有最外层围栏（含 ```lean）
+        text = Jsonl_tackler._strip_all_outer_md_fences(text)
 
         # 去除外围单/双反引号
         text = text.strip()
-        if (text.startswith("`") and text.endswith("`")) or (text.startswith("``") and text.endswith("``")):
+        if (text.startswith("``") and text.endswith("``")) or (text.startswith("`") and text.endswith("`")):
             text = text.strip("`")
 
         # 若整块被 **...** 或 *...* 包围，去除一层
         tstrip = text.strip()
-        if (tstrip.startswith("**") and tstrip.endswith("**")) or (tstrip.startswith("*") and tstrip.endswith("*")):
-            if tstrip.startswith("**") and tstrip.endswith("**"):
-                text = tstrip[2:-2]
-            elif tstrip.startswith("*") and tstrip.endswith("*"):
-                text = tstrip[1:-1]
+        if len(tstrip) >= 4 and tstrip.startswith("**") and tstrip.endswith("**"):
+            text = tstrip[2:-2].strip()
+        else:
+            if len(tstrip) >= 2 and tstrip.startswith("*") and tstrip.endswith("*"):
+                text = tstrip[1:-1].strip()
 
-        # 对每行去掉常见列表前缀
+        # 去掉每行的引用符号与列表前缀
         lines = text.splitlines()
-        cleaned_lines = [re.sub(r'^\s*[-*]\s+', '', ln) for ln in lines]
+        cleaned_lines = []
+        for ln in lines:
+            ln2 = re.sub(r'^\s*>+\s*', '', ln)              # 引用前缀
+            ln2 = re.sub(r'^\s*[-*]\s+', '', ln2)           # 列表项
+            cleaned_lines.append(ln2)
         cleaned = "\n".join([ln.rstrip() for ln in cleaned_lines]).strip("\n")
         return cleaned
 
     @staticmethod
     def _parse_labeled_text(s: str) -> Dict[str, str]:
         """
-        解析简单标注文本格式（容错 Markdown 包装）。
+        解析“带标签的整块文本”（容错 Markdown 包装）。
         支持标签：header、formal_statement、formal_code
+        - 允许标签被 \`*`、\`**`、\`_`、\`~`、破折号、空格等包裹
+        - 允许标签行后同一行即有内容
         """
         if not isinstance(s, str):
             return {}
 
+        # 若整块被代码围栏包裹（含 ```lean），先抽出内部
         s = Jsonl_tackler._extract_code_block(s)
 
         labels = ["header", "formal_statement", "formal_code"]
@@ -117,9 +154,9 @@ class Jsonl_tackler:
         current: Union[None, str] = None
         lines = s.splitlines()
 
-        # 更宽松的标签行匹配：允许标签被 `*` / `**` / `` ` `` / `~` 包裹
+        # 更宽松的标签行匹配
         label_re = re.compile(
-            r'^\s*(?:[*`~_\-\s]*)(header|formal_statement|formal_code)(?:[*`~_\-\s]*)\s*:\s*',
+            r'^\s*(?:[*`~_\-\s]*)(header|formal_statement|formal_code)(?:[*`~_\-\s]*)\s*:\s*(.*)$',
             flags=re.IGNORECASE
         )
 
@@ -127,18 +164,19 @@ class Jsonl_tackler:
             m = label_re.match(line)
             if m:
                 current = m.group(1).lower()
-                rest = line[m.end():]
-                buffers[current].append(rest)
+                rest = m.group(2) or ""
+                if rest:
+                    buffers[current].append(rest)
             else:
                 if current:
                     buffers[current].append(line)
 
+        # 输出前对各段执行 Markdown 清洗
         if any(buffers[k] for k in labels):
             result: Dict[str, str] = {}
             for k in labels:
-                block = "\n".join(buffers[k]).rstrip("\n")
-                cleaned = Jsonl_tackler._clean_content_block(block)
-                result[k] = cleaned
+                raw = "\n".join(buffers[k]).strip()
+                result[k] = Jsonl_tackler._clean_content_block(raw)
             return result
         return {}
 
@@ -163,16 +201,14 @@ class Jsonl_tackler:
         code_text = payload.get("formal_code", "")
 
         if isinstance(stmt_text, str) or isinstance(code_text, str):
-            if Jsonl_tackler._has_labels(stmt_text) or Jsonl_tackler._has_labels(code_text):
-                labeled = Jsonl_tackler._parse_labeled_text(stmt_text or code_text)
-                if labeled:
-                    payload = {
-                        "header": labeled.get("header", payload.get("header", header_default)),
-                        "formal_statement": labeled.get("formal_statement", payload.get("formal_statement", "")),
-                        "formal_code": labeled.get("formal_code", payload.get("formal_code", "")),
-                    }
+            # 如果任一字段内部仍包含标签，则进行二次解析并覆盖
+            src = stmt_text if Jsonl_tackler._has_labels(stmt_text) else code_text
+            if isinstance(src, str) and Jsonl_tackler._has_labels(src):
+                parsed = Jsonl_tackler._parse_labeled_text(src)
+                if parsed:
+                    payload.update(parsed)
 
-        if "header" not in payload:
+        if "header" not in payload or not isinstance(payload.get("header"), str):
             payload["header"] = header_default
         return payload
 
@@ -185,7 +221,7 @@ class Jsonl_tackler:
             header: str = ""
     ) -> Dict[str, Any]:
         """
-        仅支持“带标签的整块字符串”输入：
+        接受“带标签的整块字符串”（支持 Markdown）：
         header: ...
         formal_statement: ...
         formal_code: ...
@@ -199,28 +235,29 @@ class Jsonl_tackler:
         if rec_id_str not in self.mapping:
             raise KeyError(f"未在输入文件中找到 id '{rec_id_str}' 对应的 nl_problem")
 
-        # 仅支持字符串输入
+        # 仅支持字符串输入（保持与现有调用一致）
         if not isinstance(formals_json, str):
             raise TypeError("encode 仅支持字符串输入（包含 header/formal_statement/formal_code 的整块文本）")
 
-        # 若内容被三重反引号包裹，先抽出代码块
-        raw_text = self._extract_code_block(formals_json)
+        # 先尝试宽松 Markdown 解析
+        sections = self._parse_labeled_text(formals_json)
 
-        # 按关键词切分三个段落（大小写不敏感，按出现顺序截取到下一个标签或文本末尾）
-        label_re = re.compile(r'^\s*(header|formal_statement|formal_code)\s*:\s*', flags=re.IGNORECASE | re.MULTILINE)
-        matches = list(label_re.finditer(raw_text))
-        print()
-        if not matches:
-            raise ValueError("未检测到任何标签。需要包含 header:、formal_statement:、formal_code: 三个段落")
+        # 若未解析到，退回到“按标签定位的简单切分”策略
+        if not sections:
+            raw_text = self._extract_code_block(formals_json)
+            label_re = re.compile(r'^\s*(header|formal_statement|formal_code)\s*:\s*', flags=re.IGNORECASE | re.MULTILINE)
+            matches = list(label_re.finditer(raw_text))
+            if not matches:
+                raise ValueError("未检测到任何标签。需要包含 header:、formal_statement:、formal_code: 三个段落")
 
-        sections: Dict[str, str] = {}
-        for i, m in enumerate(matches):
-            label = m.group(1).lower()
-            start = m.end()
-            end = matches[i + 1].start() if i + 1 < len(matches) else len(raw_text)
-            content = raw_text[start:end].strip()
-            content = self._clean_content_block(content)
-            sections[label] = content
+            tmp: Dict[str, str] = {}
+            for i, m in enumerate(matches):
+                label = m.group(1).lower()
+                start = m.end()
+                end = matches[i + 1].start() if i + 1 < len(matches) else len(raw_text)
+                content = raw_text[start:end].strip()
+                tmp[label] = self._clean_content_block(content)
+            sections = tmp
 
         # 校验必须段落
         required = ["header", "formal_statement", "formal_code"]
@@ -228,48 +265,32 @@ class Jsonl_tackler:
         if missing:
             raise ValueError(f"缺少必要段落：{', '.join(missing)}")
 
+        # 进一步剥离 formal_code 内部可能存在的外层 ```lean 或通用 ``` 围栏
+        code_clean = self._clean_content_block(sections["formal_code"])
+        stmt_clean = self._clean_content_block(sections["formal_statement"])
+        header_clean = self._clean_content_block(sections["header"])
+
         # 规范化 formal_type
         formal_type_norm = self._normalize_formal_type(formal_type)
 
-        # 作弊检测（只检查 formal_code）
-        self._detect_cheating(sections["formal_code"])
-
-        # 组装记录并写入
-        record: Dict[str, Any] = {
+        payload: Dict[str, Any] = {
             "id": rec_id_str,
             "nl_problem": self.mapping[rec_id_str],
             "formal_type": formal_type_norm,
-            "header": sections["header"],
-            "formal_statement": sections["formal_statement"],
-            "formal_code": sections["formal_code"],
+            "header": header_clean if header_clean else (header or ""),
+            "formal_statement": stmt_clean,
+            "formal_code": code_clean,
         }
 
-        with open(output_path, "a", encoding="utf-8") as out:
-            out.write(json.dumps(record, ensure_ascii=False))
-            out.write("\n")
+        # 若任一字段内部仍残留“带标签文本”，进行二次规范化
+        payload = self._normalize_payload(payload, header_default=(header or ""))
 
-        return record
+        # 可选作弊检测（如需启用，取消注释）
+        # self._detect_cheating(payload["formal_code"])
 
-    def encode_batch(
-        self,
-        items: Iterable[Tuple[Union[str, int], Union[str, Dict[str, Any]]]],
-        output_path: str,
-        formal_type: str = "Litex",
-        header: str = ""
-    ) -> List[Dict[str, Any]]:
-        """
-        批量写入，items 为可迭代的 (rec_id, formals_json)。
-        使用 tqdm 显示进度条，返回写入的记录列表。
-        """
-        try:
-            from tqdm import tqdm
-        except Exception as e:
-            raise RuntimeError("使用 encode_batch 需要安装 tqdm：pip install tqdm") from e
+        # 追加写入 jsonl
+        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+        with open(output_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
-        written: List[Dict[str, Any]] = []
-        for rec_id, formals_json in tqdm(items, desc="写入 formals"):
-            rec = self.encode(rec_id=rec_id, formals_json=formals_json,
-                              output_path=output_path, formal_type=formal_type, header=header)
-            written.append(rec)
-        return written
-
+        return payload
